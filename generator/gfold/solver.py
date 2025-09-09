@@ -1,8 +1,11 @@
 import cvxpy as cp
 import numpy as np
 import os
+import mosek
 from cvxpygen import cpg
 from .config import GFoldConfig
+import warnings
+warnings.filterwarnings("ignore")
 
 class GFoldSolver:
     """
@@ -86,8 +89,8 @@ class GFoldSolver:
         # More parameters
         max_angle = cp.Parameter(name="max_angle", value=config.environment.cos_max_angle)
         dt_squared = self._calculate_parameter(dt**2, name="dt_squared")
-        initial_pos = cp.Parameter(3, name="initial_position", value=config.spacecraft.initial_position)
-        initial_vel = cp.Parameter(3, name="initial_vel", value=config.spacecraft.initial_velocity)
+        initial_position = cp.Parameter(3, name="initial_position", value=config.spacecraft.initial_position)
+        initial_velocity = cp.Parameter(3, name="initial_velocity", value=config.spacecraft.initial_velocity)
         target_vel = cp.Parameter(3, name="target_velocity", value=config.spacecraft.target_velocity)
         g = cp.Parameter(3, name="gravity", value=config.environment.gravity)
         g_dt = self._calculate_parameter(g*dt, 3, name="gravity_dt")
@@ -110,8 +113,8 @@ class GFoldSolver:
             "min_exp_z0": min_exp,
             "max_angle": max_angle,
             "dt_squared": dt_squared,
-            "initial_position": initial_pos,
-            "initial_vel": initial_vel,
+            "initial_position": initial_position,
+            "initial_velocity": initial_velocity,
             "target_velocity": target_vel,
             "gravity": g,
             "gravity_dt": g_dt,
@@ -120,8 +123,8 @@ class GFoldSolver:
         
         # Constraints
         constraints = [
-            x[0, :3] == initial_pos,
-            x[0, 3:] == initial_vel,
+            x[0, :3] == initial_position,
+            x[0, 3:] == initial_velocity,
             z[0] == log_mass,
         ]
 
@@ -132,6 +135,8 @@ class GFoldSolver:
             constraints.append(s[i] >= cp.norm(u[i, :]))  # |u| = s
             constraints.append((1 - (z[i]-z0[i]) + cp.square(z[i]-z0[i])/2) <= s[i] * min_exp[i])
             constraints.append(s[i] * max_exp[i] <= (1 - (z[i]-z0[i])))  # upper bound for s 
+            constraints.append(s[i] * min_exp[i] >= (1 - (z[i]-z0[i])))  # lower bound for s
+            constraints.append(x[i, 2] >= 0)  # stay above ground
             if i != n - 1:
                 acc = (u[i+1, :] + u[i, :])/2
                 constraints += [
@@ -139,12 +144,15 @@ class GFoldSolver:
                     x[i+1, 3:] == x[i, 3:] + acc*dt + g_dt,  # velocity update
                     z[i+1] == z[i] - (s[i] + s[i+1]) / 2 * a_dt  # mass update
                 ]
+                constraints += [x[i+1, 2] <= x[i, 2]]
 
         # Constraints on the last step
         constraints += [
             x[n-1, :3] == config.spacecraft.target_position,  # landing site
             x[n-1, 3:] == target_vel,
             z[n-1] >= log_dry_mass,
+            u[n-1, 0] == 0,
+            u[n-1, 1] == 0
         ]
         
         self.constraints = constraints
@@ -165,8 +173,10 @@ class GFoldSolver:
         """
         if not self.problem:
             raise ValueError("Problem not initialized properly")
-            
-        solution_val = self.problem.solve(verbose=verbose)
+
+        # solution_val = self.problem.solve(verbose=verbose, solver=cp.MOSEK)
+        # solution_val = self.problem.solve(verbose=verbose, solver=cp.QOCO)
+        solution_val = self.problem.solve(verbose=verbose, solver=cp.ECOS)
         
         # Extract solution data
         x_val = self.variables["x"].value
@@ -213,7 +223,7 @@ class GFoldSolver:
         os.makedirs(code_dir, exist_ok=True)
         
         # Generate code
-        cpg.generate_code(self.problem, code_dir=code_dir, solver=cp.CLARABEL, wrapper=False)
+        cpg.generate_code(self.problem, code_dir=code_dir, solver=cp.QOCO)
         return code_dir
 
     def update_parameter(self, param_name, new_value):

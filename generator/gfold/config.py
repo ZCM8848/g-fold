@@ -167,7 +167,7 @@ class GFoldConfig:
         """
         # Initialize sub-configurations
         self.spacecraft = spacecraft if spacecraft is not None else SpacecraftConfig()
-        self.environment = environment if environment is not None else EnvironmentConfig.mars()
+        self.environment = environment if environment is not None else EnvironmentConfig.earth()
         self.solver = solver if solver is not None else SolverConfig()
         
         # Process any remaining kwargs by trying to assign them to the appropriate sub-config
